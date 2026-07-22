@@ -10,54 +10,67 @@ async function details(tmdbId: number): Promise<TmdbMovie | null> {
 }
 
 export default async function handler(request: any, response: any): Promise<void> {
-  if (request.query.id !== 'telegram') return response.status(404).json({ metas: [] });
-  const extra = String(request.query.extra ?? '').replace(/\.json$/, '');
-  const search = extra.startsWith('search=') ? decodeURIComponent(extra.slice(7)).trim() : '';
-  if (!search) return response.status(200).json({ metas: [] });
-
-  const { data, error } = await db.from('media')
-    .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption')
-    .or(`normalized_title.ilike.%${search}%,file_name.ilike.%${search}%,caption.ilike.%${search}%`)
-    .limit(30);
-
-  if (error) {
-    console.error('Catalog search error:', error.message);
-    return response.status(200).json({ metas: [] });
-  }
-
-  const unique = new Map<string, { id: string; imdb_id: string | null; tmdb_id: number | null; normalized_title: string | null; file_name: string | null }>();
-
-  for (const item of data ?? []) {
-    const key = item.imdb_id || item.id;
-    if (!unique.has(key)) {
-      unique.set(key, item);
-    }
-  }
-
-  const metas = await Promise.all([...unique.values()].slice(0, 20).map(async (item) => {
-    let movie: TmdbMovie | null = null;
-    if (item.tmdb_id) {
-      movie = await details(item.tmdb_id);
+  try {
+    const rawExtra = Array.isArray(request.query.extra) ? request.query.extra.join('/') : String(request.query.extra ?? '');
+    const searchParam = request.query.search ? String(request.query.search) : '';
+    const extraStr = rawExtra.replace(/\.json$/, '');
+    
+    let search = searchParam.trim();
+    if (!search && extraStr.startsWith('search=')) {
+      search = decodeURIComponent(extraStr.slice(7)).trim();
+    } else if (!search && extraStr && extraStr !== 'telegram') {
+      search = decodeURIComponent(extraStr).trim();
     }
 
-    const cleanTitle = (item.file_name || item.normalized_title || 'Telegram File')
-      .replace(/^@[A-Za-z0-9_]+\s*[-_:]*\s*/g, '')
-      .replace(/\.[A-Za-z0-9]{2,4}$/, '')
-      .replace(/\[.*?\]/g, '')
-      .replace(/➠.*$/g, '')
-      .trim();
+    if (!search) return response.status(200).json({ metas: [] });
 
-    const id = item.imdb_id || `tg:${item.id}`;
+    const { data, error } = await db.from('media')
+      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption')
+      .or(`normalized_title.ilike.%${search}%,file_name.ilike.%${search}%,caption.ilike.%${search}%`)
+      .limit(30);
 
-    return {
-      id,
-      type: 'movie',
-      name: movie?.title || cleanTitle || 'Telegram Stream',
-      description: movie?.overview || item.file_name || item.normalized_title || 'Indexed Telegram stream',
-      poster: movie?.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : undefined,
-      releaseInfo: movie?.release_date?.slice(0, 4)
-    };
-  }));
+    if (error) {
+      console.error('Catalog search error:', error.message);
+      return response.status(200).json({ metas: [] });
+    }
 
-  response.status(200).json({ metas });
+    const unique = new Map<string, { id: string; imdb_id: string | null; tmdb_id: number | null; normalized_title: string | null; file_name: string | null }>();
+
+    for (const item of data ?? []) {
+      const key = item.imdb_id || item.id;
+      if (!unique.has(key)) {
+        unique.set(key, item);
+      }
+    }
+
+    const metas = await Promise.all([...unique.values()].slice(0, 20).map(async (item) => {
+      let movie: TmdbMovie | null = null;
+      if (item.tmdb_id) {
+        movie = await details(item.tmdb_id);
+      }
+
+      const cleanTitle = (item.file_name || item.normalized_title || 'Telegram File')
+        .replace(/^@[A-Za-z0-9_]+\s*[-_:]*\s*/g, '')
+        .replace(/\.[A-Za-z0-9]{2,4}$/, '')
+        .replace(/\[.*?\]/g, '')
+        .replace(/➠.*$/g, '')
+        .trim();
+
+      const id = item.imdb_id || `tg:${item.id}`;
+
+      return {
+        id,
+        type: 'movie',
+        name: movie?.title || cleanTitle || 'Telegram Stream',
+        description: movie?.overview || item.file_name || item.normalized_title || 'Indexed Telegram stream',
+        poster: movie?.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : undefined,
+        releaseInfo: movie?.release_date?.slice(0, 4)
+      };
+    }));
+
+    response.status(200).json({ metas });
+  } catch (err: any) {
+    console.error('Catalog handler error:', err?.message || err);
+    response.status(200).json({ metas: [] });
+  }
 }
