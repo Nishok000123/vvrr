@@ -24,10 +24,14 @@ export default async function handler(request: any, response: any): Promise<void
 
     if (!search) return response.status(200).json({ metas: [] });
 
-    const { data, error } = await db.from('media')
-      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption')
-      .or(`normalized_title.ilike.%${search}%,file_name.ilike.%${search}%,caption.ilike.%${search}%`)
-      .limit(30);
+    const words = search.split(/\s+/).filter((w) => w.length > 0);
+    let dbQuery = db.from('media').select('id, imdb_id, tmdb_id, normalized_title, file_name, caption');
+
+    for (const word of words) {
+      dbQuery = dbQuery.or(`normalized_title.ilike.%${word}%,file_name.ilike.%${word}%,caption.ilike.%${word}%`);
+    }
+
+    const { data, error } = await dbQuery.limit(30);
 
     if (error) {
       console.error('Catalog search error:', error.message);
