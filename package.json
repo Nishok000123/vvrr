@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
+    "check": "tsc --noEmit",
     "compile": "tsc",
     "test": "tsx --test test/**/*.test.ts",
     "start:worker": "tsx --env-file=.env src/worker/index.ts",
