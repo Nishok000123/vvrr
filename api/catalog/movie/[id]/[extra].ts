@@ -9,6 +9,30 @@ async function details(tmdbId: number): Promise<TmdbMovie | null> {
   return response && response.ok ? (response.json() as Promise<TmdbMovie>) : null;
 }
 
+function calculateScore(item: any, searchWords: string[]): number {
+  const text = `${item.file_name || ''} ${item.normalized_title || ''} ${item.caption || ''}`.toLowerCase();
+  
+  let keywordScore = 0;
+  for (const word of searchWords) {
+    if (text.includes(word.toLowerCase())) {
+      keywordScore += 100;
+    }
+  }
+
+  let qualityScore = 0;
+  if (text.includes('2160p') || text.includes('4k') || text.includes('uhd')) qualityScore += 500;
+  else if (text.includes('1080p')) qualityScore += 400;
+  else if (text.includes('720p')) qualityScore += 300;
+  else if (text.includes('480p')) qualityScore += 200;
+  else if (text.includes('hdrip') || text.includes('web-dl') || text.includes('webrip')) qualityScore += 100;
+
+  if (text.includes('10bit') || text.includes('hdr')) qualityScore += 50;
+  if (text.includes('hevc') || text.includes('x265')) qualityScore += 30;
+  if (text.includes('dd+') || text.includes('5.1')) qualityScore += 20;
+
+  return keywordScore * 10 + qualityScore;
+}
+
 export default async function handler(request: any, response: any): Promise<void> {
   try {
     const rawExtra = Array.isArray(request.query.extra) ? request.query.extra.join('/') : String(request.query.extra ?? '');
@@ -25,22 +49,27 @@ export default async function handler(request: any, response: any): Promise<void
     if (!search) return response.status(200).json({ metas: [] });
 
     const words = search.split(/\s+/).filter((w) => w.length > 0);
-    let dbQuery = db.from('media').select('id, imdb_id, tmdb_id, normalized_title, file_name, caption');
+    const conditions = words.flatMap((w) => [
+      `normalized_title.ilike.%${w}%`,
+      `file_name.ilike.%${w}%`,
+      `caption.ilike.%${w}%`
+    ]).join(',');
 
-    for (const word of words) {
-      dbQuery = dbQuery.or(`normalized_title.ilike.%${word}%,file_name.ilike.%${word}%,caption.ilike.%${word}%`);
-    }
-
-    const { data, error } = await dbQuery.limit(30);
+    const { data, error } = await db.from('media')
+      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption')
+      .or(conditions)
+      .limit(60);
 
     if (error) {
       console.error('Catalog search error:', error.message);
       return response.status(200).json({ metas: [] });
     }
 
+    const items = (data ?? []).sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
+
     const unique = new Map<string, { id: string; imdb_id: string | null; tmdb_id: number | null; normalized_title: string | null; file_name: string | null }>();
 
-    for (const item of data ?? []) {
+    for (const item of items) {
       const key = item.imdb_id || item.id;
       if (!unique.has(key)) {
         unique.set(key, item);
