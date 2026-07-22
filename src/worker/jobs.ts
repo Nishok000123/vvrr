@@ -123,7 +123,8 @@ async function runJob(client: any, job: Job): Promise<void> {
       const destination = await client.getEntity(targetId);
       const started = Date.now();
 
-      await client.forwardMessages(destination, { messages: [item.telegram_message_id], fromPeer: sourceEntity });
+      // Send as native forward without "Forwarded from" author tag
+      await client.forwardMessages(destination, { messages: [item.telegram_message_id], fromPeer: sourceEntity, dropAuthor: true });
       const url = await waitForBotUrl(client, destination, bot, started);
       if (url) return { media_id: job.media_id, link_bot_id: bot.id, url, priority: getBotPriority(bot.username) };
     } catch (e: any) {
