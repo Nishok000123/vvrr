@@ -3,14 +3,14 @@ import { LINK_CACHE_MS } from '../../../src/shared/config.js';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function cachedLinks(mediaIds: string[]): Promise<Array<{ url: string }>> {
+async function cachedLinks(mediaIds: string[]): Promise<Array<{ url: string; media_id: string }>> {
   if (!mediaIds.length) return [];
   const cutoff = new Date(Date.now() - LINK_CACHE_MS).toISOString();
   const { data, error } = await db.from('direct_links').select('url, media_id, created_at')
     .in('media_id', mediaIds).gte('created_at', cutoff).order('created_at', { ascending: false });
   if (error) throw error;
   const seen = new Set<string>();
-  return (data ?? []).filter((link) => !seen.has(link.url) && !!seen.add(link.url)).map((link) => ({ url: link.url }));
+  return (data ?? []).filter((link) => !seen.has(link.url) && !!seen.add(link.url)).map((link) => ({ url: link.url, media_id: link.media_id }));
 }
 
 async function queueJobs(mediaIds: string[]): Promise<void> {
@@ -22,6 +22,44 @@ async function queueJobs(mediaIds: string[]): Promise<void> {
     const { error } = await db.from('generation_jobs').insert({ media_id: mediaId });
     if (error) throw error;
   }
+}
+
+function formatStreamTitle(mediaItem: any): string {
+  const fileName = mediaItem?.file_name || mediaItem?.normalized_title || 'Telegram File';
+  const caption = mediaItem?.caption || '';
+  const text = `${fileName} ${caption}`;
+
+  let quality = '';
+  if (/2160p|4k|uhd/i.test(text)) quality = '4K 2160p';
+  else if (/1080p/i.test(text)) quality = '1080p';
+  else if (/720p/i.test(text)) quality = '720p';
+  else if (/480p/i.test(text)) quality = '480p';
+  else if (/hdrip|web-dl|webrip/i.test(text)) quality = 'HDRip';
+  else quality = 'HD';
+
+  let codec = '';
+  if (/10bit/i.test(text)) codec += '10Bit ';
+  if (/hevc|x265/i.test(text)) codec += 'HEVC';
+  else if (/x264|avc/i.test(text)) codec += 'x264';
+  codec = codec.trim();
+
+  let audio = '';
+  if (/dd\+?5\.1|5\.1|6ch/i.test(text)) audio = 'DD+ 5.1';
+  else if (/aac/i.test(text)) audio = 'AAC';
+
+  let sizeStr = '';
+  if (mediaItem?.file_size) {
+    const mb = Number(mediaItem.file_size) / (1024 * 1024);
+    sizeStr = mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+  } else {
+    const sizeMatch = text.match(/(\d+(?:\.\d+)?\s*(?:GB|MB|MiB|GiB))/i);
+    if (sizeMatch) sizeStr = sizeMatch[1];
+  }
+
+  const tagParts = [quality, codec, audio, sizeStr].filter(Boolean).join(' • ');
+  const cleanName = fileName.replace(/^@[A-Za-z0-9_]+\s*[-_:]*\s*/g, '').trim();
+
+  return `⚡ ${tagParts}\n📁 ${cleanName}`;
 }
 
 export const config = { maxDuration: 45 };
@@ -37,14 +75,13 @@ export default async function handler(request: any, response: any): Promise<void
   } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)) {
     mediaIds = [rawId];
   } else if (parts.length >= 3 && /^tt\d+$/i.test(parts[0])) {
-    // Handling TV Series Episode ID (e.g. tt1234567:1:2)
     const seriesImdbId = parts[0];
     const seasonNum = parseInt(parts[1], 10);
     const episodeNum = parseInt(parts[2], 10);
     const sStr = String(seasonNum).padStart(2, '0');
     const eStr = String(episodeNum).padStart(2, '0');
-    const sTag = `S${sStr}E${eStr}`; // S01E02
-    const altTag = `${seasonNum}x${eStr}`; // 1x02
+    const sTag = `S${sStr}E${eStr}`;
+    const altTag = `${seasonNum}x${eStr}`;
 
     const { data: epMedia } = await db.from('media')
       .select('id')
@@ -77,23 +114,19 @@ export default async function handler(request: any, response: any): Promise<void
       }
     }
   } else {
-    // 1. Check if media table already has this imdb_id
     const { data: media } = await db.from('media').select('id').eq('imdb_id', rawId).limit(10);
     mediaIds = (media ?? []).map((item) => item.id);
 
-    // 2. Fallback: If no imdb_id match, resolve title via Cinemeta / TMDB and match media table by title!
     if (!mediaIds.length && /^tt\d+$/i.test(rawId)) {
       try {
         let title: string | null = null;
 
-        // Try Cinemeta
         const stremioMetaRes = await fetch(`https://v3-cinemeta.strem.io/meta/movie/${rawId}.json`).catch(() => null);
         if (stremioMetaRes && stremioMetaRes.ok) {
           const metaJson: any = await stremioMetaRes.json();
           title = metaJson?.meta?.name || null;
         }
 
-        // Try TMDB if Cinemeta name missing
         const apiKey = process.env.TMDB_API_KEY;
         if (!title && apiKey) {
           const tmdbRes = await fetch(`https://api.themoviedb.org/3/find/${rawId}?api_key=${apiKey}&external_source=imdb_id`).catch(() => null);
@@ -114,7 +147,6 @@ export default async function handler(request: any, response: any): Promise<void
           const { data: titleMatches } = await db.from('media').select('id').or(conditions).limit(10);
           if (titleMatches && titleMatches.length) {
             mediaIds = titleMatches.map((m) => m.id);
-            // Associate imdb_id in database for instant future lookups
             await db.from('media').update({ imdb_id: rawId }).in('id', mediaIds);
           }
         }
@@ -136,5 +168,20 @@ export default async function handler(request: any, response: any): Promise<void
       if (links.length) break;
     }
   }
-  response.status(200).json({ streams: links.map((link) => ({ name: 'Telegram Bridge', title: '⚡ Fast Stream Link', url: link.url })) });
+
+  const { data: mediaMapData } = await db.from('media')
+    .select('id, file_name, normalized_title, caption, file_size')
+    .in('id', mediaIds);
+  const mediaMap = new Map((mediaMapData ?? []).map((m: any) => [m.id, m]));
+
+  const streams = links.map((link) => {
+    const item = mediaMap.get(link.media_id);
+    return {
+      name: 'Telegram Bridge',
+      title: formatStreamTitle(item),
+      url: link.url
+    };
+  });
+
+  response.status(200).json({ streams });
 }

@@ -49,7 +49,10 @@ export default async function handler(request: any, response: any): Promise<void
 
     if (!search) return response.status(200).json({ metas: [] });
 
-    const words = search.split(/\s+/).filter((w) => w.length > 0);
+    // Strip noise terms like years/resolutions for cleaner word matching
+    const cleanSearch = search.replace(/\b(202[0-9]|199[0-9]|200[0-9]|201[0-9]|720p|1080p|2160p|4k)\b/gi, '').trim() || search;
+    const words = cleanSearch.split(/\s+/).filter((w) => w.length > 1);
+
     const conditions = words.flatMap((w) => [
       `normalized_title.ilike.%${w}%`,
       `file_name.ilike.%${w}%`,
@@ -57,16 +60,23 @@ export default async function handler(request: any, response: any): Promise<void
     ]).join(',');
 
     const { data, error } = await db.from('media')
-      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption')
+      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption, file_size')
       .or(conditions)
-      .limit(60);
+      .limit(80);
 
     if (error) {
       console.error('Catalog search error:', error.message);
       return response.status(200).json({ metas: [] });
     }
 
-    const items = (data ?? []).sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
+    // Require ALL search words to be present in the item text for strict accuracy
+    const matchedItems = (data ?? []).filter((item) => {
+      const text = `${item.file_name || ''} ${item.normalized_title || ''} ${item.caption || ''}`.toLowerCase();
+      return words.every((w) => text.includes(w.toLowerCase()));
+    });
+
+    const items = (matchedItems.length ? matchedItems : (data ?? []))
+      .sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
 
     const unique = new Map<string, { id: string; imdb_id: string | null; tmdb_id: number | null; normalized_title: string | null; file_name: string | null }>();
 
