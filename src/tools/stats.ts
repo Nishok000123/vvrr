@@ -1,5 +1,7 @@
 import { db } from '../shared/db.js';
 
-const { data, error } = await db.from('media').select('id, file_name, normalized_title, tmdb_id, imdb_id').limit(5);
-if (error) console.error(error.message);
-else console.log('Sample indexed media:', data);
+const { data: jobs } = await db.from('generation_jobs').select('*').limit(5);
+console.log('Recent Generation Jobs:', jobs);
+
+const { data: links } = await db.from('direct_links').select('*').limit(5);
+console.log('Recent Direct Links:', links);

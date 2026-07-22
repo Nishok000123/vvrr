@@ -61,19 +61,19 @@ async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: n
       const textUrl = extractUrl(text, bot.url_pattern);
       if (textUrl) return textUrl;
 
-      // Check inline buttons
+      // Check inline buttons (URL buttons & Callback buttons)
       if (message.buttons) {
         for (let r = 0; r < message.buttons.length; r++) {
           for (let c = 0; c < message.buttons[r].length; c++) {
             const btn = message.buttons[r][c];
             const btnKey = `${message.id}:${r}:${c}`;
 
+            // 1. Direct URL buttons (long press copy link)
             if (btn.url && /^https?:\/\//i.test(btn.url)) {
-              const url = extractUrl(btn.url, bot.url_pattern);
+              const url = extractUrl(btn.url, bot.url_pattern) || btn.url.replace(/[),.;]+$/, '');
               if (url) return url;
-            }
-
-            if (!clickedButtons.has(btnKey)) {
+            } else if (!clickedButtons.has(btnKey)) {
+              // 2. Callback buttons (trigger link generation)
               const label = String(btn.text || '').toLowerCase();
               if (
                 label.includes('generate') ||
@@ -86,8 +86,8 @@ async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: n
                 clickedButtons.add(btnKey);
                 try {
                   await message.click(r, c);
-                } catch (e: any) {
-                  console.log(`Failed to click button '${btn.text}':`, e?.message);
+                } catch {
+                  // Silently ignore 400 errors for non-callback buttons
                 }
               }
             }
