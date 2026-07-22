@@ -20,11 +20,9 @@ function calculateScore(item: any, searchWords: string[]): number {
   let keywordScore = 0;
   for (const word of searchWords) {
     const w = word.toLowerCase();
-    // Massive bonus if title STARTS with the search word (e.g. "29 (2026)" starts with "29")
     if (cleanTitle.startsWith(w)) {
       keywordScore += 2000;
     }
-    // High bonus if exact word boundary matches (e.g. "29" as a standalone word)
     const wordBoundaryRegex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
     if (wordBoundaryRegex.test(cleanTitle)) {
       keywordScore += 1000;
@@ -69,34 +67,20 @@ export default async function handler(request: any, response: any): Promise<void
     const keywords = rawWords.filter((w) => !STOP_WORDS.has(w.toLowerCase()));
     const words = keywords.length ? keywords : rawWords;
 
-    const conditions = words.flatMap((w) => [
-      `normalized_title.ilike.%${w}%`,
-      `file_name.ilike.%${w}%`,
-      `caption.ilike.%${w}%`
-    ]).join(',');
+    let dbQuery = db.from('media').select('id, imdb_id, tmdb_id, normalized_title, file_name, caption, file_size');
 
-    const { data, error } = await db.from('media')
-      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption, file_size')
-      .or(conditions)
-      .limit(80);
+    for (const w of words) {
+      dbQuery = dbQuery.or(`normalized_title.ilike.%${w}%,file_name.ilike.%${w}%,caption.ilike.%${w}%`);
+    }
+
+    const { data, error } = await dbQuery.limit(60);
 
     if (error) {
       console.error('Catalog search error:', error.message);
       return response.status(200).json({ metas: [] });
     }
 
-    // Filter items to ensure search words match title or text
-    const matchedItems = (data ?? []).filter((item) => {
-      const text = `${item.file_name || ''} ${item.normalized_title || ''} ${item.caption || ''}`.toLowerCase();
-      const cleanTitle = (item.file_name || item.normalized_title || '').replace(/^@[A-Za-z0-9_]+\s*[-_:]*\s*/g, '').toLowerCase();
-      return words.every((w) => {
-        const wordBoundaryRegex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-        return wordBoundaryRegex.test(cleanTitle) || text.includes(w.toLowerCase());
-      });
-    });
-
-    const items = (matchedItems.length ? matchedItems : (data ?? []))
-      .sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
+    const items = (data ?? []).sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
 
     const unique = new Map<string, { id: string; imdb_id: string | null; tmdb_id: number | null; normalized_title: string | null; file_name: string | null }>();
 
