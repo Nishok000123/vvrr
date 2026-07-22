@@ -51,7 +51,8 @@ async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: n
 
   for (let attempt = 0; attempt < 15; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const messages = await client.getMessages(botEntity, { limit: 10 });
+    const messages = await client.getMessages(botEntity, { limit: 10 }).catch(() => null);
+    if (!messages) continue;
 
     for (const message of (messages ?? []) as any[]) {
       const timestamp = Number(message.date ?? 0) * 1000;
@@ -100,6 +101,10 @@ async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: n
 }
 
 async function runJob(client: any, job: Job): Promise<void> {
+  if (!client.connected) {
+    await client.connect().catch(() => {});
+  }
+
   const { data: media, error: mediaError } = await db.from('media').select('*').eq('id', job.media_id).single();
   if (mediaError) throw mediaError;
   const item = media as Media;
