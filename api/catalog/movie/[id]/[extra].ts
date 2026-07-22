@@ -12,35 +12,45 @@ async function details(tmdbId: number): Promise<TmdbMovie | null> {
 }
 
 function calculateScore(item: any, searchWords: string[]): number {
-  const text = `${item.file_name || ''} ${item.normalized_title || ''} ${item.caption || ''}`.toLowerCase();
   const cleanTitle = (item.file_name || item.normalized_title || '')
     .replace(/^@[A-Za-z0-9_]+\s*[-_:]*\s*/g, '')
+    .replace(/https?:\/\/\S+/g, '')
     .toLowerCase();
+
+  const cleanCaption = (item.caption || '')
+    .replace(/https?:\/\/\S+/g, '')
+    .toLowerCase();
+
+  const fullText = `${cleanTitle} ${cleanCaption}`;
 
   let keywordScore = 0;
   for (const word of searchWords) {
     const w = word.toLowerCase();
+    
+    // Huge bonus if clean title STARTS with search term (e.g. "29 (2026)")
     if (cleanTitle.startsWith(w)) {
-      keywordScore += 2000;
+      keywordScore += 5000;
     }
-    const wordBoundaryRegex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+
+    // High bonus for standalone title word boundary match
+    const wordBoundaryRegex = new RegExp(`(?:^|\\s|\\[|\\()${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|\\s|\\]|\\)|-)`, 'i');
     if (wordBoundaryRegex.test(cleanTitle)) {
-      keywordScore += 1000;
-    } else if (text.includes(w)) {
-      keywordScore += 100;
+      keywordScore += 2500;
+    } else if (cleanTitle.includes(w)) {
+      keywordScore += 500;
+    } else if (cleanCaption.includes(w)) {
+      keywordScore += 50;
     }
   }
 
   let qualityScore = 0;
-  if (text.includes('2160p') || text.includes('4k') || text.includes('uhd')) qualityScore += 500;
-  else if (text.includes('1080p')) qualityScore += 400;
-  else if (text.includes('720p')) qualityScore += 300;
-  else if (text.includes('480p')) qualityScore += 200;
-  else if (text.includes('hdrip') || text.includes('web-dl') || text.includes('webrip')) qualityScore += 100;
+  if (fullText.includes('2160p') || fullText.includes('4k') || fullText.includes('uhd')) qualityScore += 500;
+  else if (fullText.includes('1080p')) qualityScore += 400;
+  else if (fullText.includes('720p')) qualityScore += 300;
+  else if (fullText.includes('480p')) qualityScore += 200;
 
-  if (text.includes('10bit') || text.includes('hdr')) qualityScore += 50;
-  if (text.includes('hevc') || text.includes('x265')) qualityScore += 30;
-  if (text.includes('dd+') || text.includes('5.1')) qualityScore += 20;
+  if (fullText.includes('10bit') || fullText.includes('hdr')) qualityScore += 50;
+  if (fullText.includes('hevc') || fullText.includes('x265')) qualityScore += 30;
 
   return keywordScore * 10 + qualityScore;
 }
@@ -67,20 +77,25 @@ export default async function handler(request: any, response: any): Promise<void
     const keywords = rawWords.filter((w) => !STOP_WORDS.has(w.toLowerCase()));
     const words = keywords.length ? keywords : rawWords;
 
-    let dbQuery = db.from('media').select('id, imdb_id, tmdb_id, normalized_title, file_name, caption, file_size');
+    // Search media table by main title / file_name first
+    const firstWord = words[0];
+    const { data: titleData } = await db.from('media')
+      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption, file_size')
+      .or(`file_name.ilike.%${firstWord}%,normalized_title.ilike.%${firstWord}%`)
+      .limit(60);
 
-    for (const w of words) {
-      dbQuery = dbQuery.or(`normalized_title.ilike.%${w}%,file_name.ilike.%${w}%,caption.ilike.%${w}%`);
+    const { data: allData } = await db.from('media')
+      .select('id, imdb_id, tmdb_id, normalized_title, file_name, caption, file_size')
+      .or(`file_name.ilike.%${firstWord}%,normalized_title.ilike.%${firstWord}%,caption.ilike.%${firstWord}%`)
+      .limit(60);
+
+    const mergedMap = new Map<string, any>();
+    for (const item of [...(titleData ?? []), ...(allData ?? [])]) {
+      mergedMap.set(item.id, item);
     }
+    const combinedData = [...mergedMap.values()];
 
-    const { data, error } = await dbQuery.limit(60);
-
-    if (error) {
-      console.error('Catalog search error:', error.message);
-      return response.status(200).json({ metas: [] });
-    }
-
-    const items = (data ?? []).sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
+    const items = combinedData.sort((a, b) => calculateScore(b, words) - calculateScore(a, words));
 
     const unique = new Map<string, { id: string; imdb_id: string | null; tmdb_id: number | null; normalized_title: string | null; file_name: string | null }>();
 
