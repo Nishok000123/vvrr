@@ -4,5 +4,5 @@ export function required(name: string): string {
   return value;
 }
 
-export const LINK_CACHE_HOURS = 12;
+export const LINK_CACHE_HOURS = 6;
 export const LINK_CACHE_MS = LINK_CACHE_HOURS * 60 * 60 * 1000;
