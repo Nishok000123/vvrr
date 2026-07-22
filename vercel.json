@@ -1,5 +1,11 @@
 {
   "buildCommand": null,
+  "rewrites": [
+    { "source": "/", "destination": "/api/index" },
+    { "source": "/manifest.json", "destination": "/api/manifest" },
+    { "source": "/catalog/movie/:id/:extra*", "destination": "/api/catalog/movie/:id/:extra*" },
+    { "source": "/stream/movie/:id*", "destination": "/api/stream/movie/:id*" }
+  ],
   "functions": {
     "api/stream/movie/[id].ts": { "maxDuration": 45 }
   }
