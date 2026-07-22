@@ -36,9 +36,37 @@ export default async function handler(request: any, response: any): Promise<void
   } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)) {
     mediaIds = [rawId];
   } else {
-    const { data: media, error } = await db.from('media').select('id').eq('imdb_id', rawId).limit(10);
-    if (error) throw error;
+    // 1. Check if media table already has this imdb_id
+    const { data: media } = await db.from('media').select('id').eq('imdb_id', rawId).limit(10);
     mediaIds = (media ?? []).map((item) => item.id);
+
+    // 2. Fallback: If no imdb_id match, resolve movie title from Cinemeta and match media table by title!
+    if (!mediaIds.length && /^tt\d+$/i.test(rawId)) {
+      try {
+        const stremioMetaRes = await fetch(`https://v3-cinemeta.strem.io/meta/movie/${rawId}.json`).catch(() => null);
+        if (stremioMetaRes && stremioMetaRes.ok) {
+          const metaJson: any = await stremioMetaRes.json();
+          const title = metaJson?.meta?.name;
+          if (title) {
+            const words = title.replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean);
+            const conditions = words.flatMap((w: string) => [
+              `file_name.ilike.%${w}%`,
+              `normalized_title.ilike.%${w}%`,
+              `caption.ilike.%${w}%`
+            ]).join(',');
+
+            const { data: titleMatches } = await db.from('media').select('id').or(conditions).limit(10);
+            if (titleMatches && titleMatches.length) {
+              mediaIds = titleMatches.map((m) => m.id);
+              // Associate imdb_id in database for instant future lookups
+              await db.from('media').update({ imdb_id: rawId }).in('id', mediaIds);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error(`Cinemeta fallback error for ${rawId}:`, e?.message);
+      }
+    }
   }
 
   if (!mediaIds.length) return response.status(200).json({ streams: [] });
