@@ -30,11 +30,52 @@ export default async function handler(request: any, response: any): Promise<void
   const rawId = String(request.query.id ?? '').replace(/\.json$/, '');
 
   let mediaIds: string[] = [];
+  const parts = rawId.split(':');
 
   if (rawId.startsWith('tg:')) {
     mediaIds = [rawId.slice(3)];
   } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)) {
     mediaIds = [rawId];
+  } else if (parts.length >= 3 && /^tt\d+$/i.test(parts[0])) {
+    // Handling TV Series Episode ID (e.g. tt1234567:1:2)
+    const seriesImdbId = parts[0];
+    const seasonNum = parseInt(parts[1], 10);
+    const episodeNum = parseInt(parts[2], 10);
+    const sStr = String(seasonNum).padStart(2, '0');
+    const eStr = String(episodeNum).padStart(2, '0');
+    const sTag = `S${sStr}E${eStr}`; // S01E02
+    const altTag = `${seasonNum}x${eStr}`; // 1x02
+
+    const { data: epMedia } = await db.from('media')
+      .select('id')
+      .or(`file_name.ilike.%${sTag}%,normalized_title.ilike.%${sTag}%,caption.ilike.%${sTag}%,file_name.ilike.%${altTag}%`)
+      .limit(10);
+
+    mediaIds = (epMedia ?? []).map((m) => m.id);
+
+    if (!mediaIds.length) {
+      try {
+        const seriesMetaRes = await fetch(`https://v3-cinemeta.strem.io/meta/series/${seriesImdbId}.json`).catch(() => null);
+        if (seriesMetaRes && seriesMetaRes.ok) {
+          const metaJson: any = await seriesMetaRes.json();
+          const seriesName = metaJson?.meta?.name;
+          if (seriesName) {
+            const cleanName = seriesName.replace(/[^\w\s]/g, '').trim();
+            const { data: nameMatches } = await db.from('media')
+              .select('id')
+              .or(`file_name.ilike.%${cleanName}%,normalized_title.ilike.%${cleanName}%`)
+              .or(`file_name.ilike.%${sTag}%,caption.ilike.%${sTag}%,file_name.ilike.%${altTag}%`)
+              .limit(10);
+
+            if (nameMatches && nameMatches.length) {
+              mediaIds = nameMatches.map((m) => m.id);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error(`Series episode resolution error for ${rawId}:`, e?.message);
+      }
+    }
   } else {
     // 1. Check if media table already has this imdb_id
     const { data: media } = await db.from('media').select('id').eq('imdb_id', rawId).limit(10);

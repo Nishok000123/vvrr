@@ -35,6 +35,7 @@ function calculateScore(item: any, searchWords: string[]): number {
 
 export default async function handler(request: any, response: any): Promise<void> {
   try {
+    const catalogType = String(request.query.type || 'movie');
     const rawExtra = Array.isArray(request.query.extra) ? request.query.extra.join('/') : String(request.query.extra ?? '');
     const searchParam = request.query.search ? String(request.query.search) : '';
     const extraStr = rawExtra.replace(/\.json$/, '');
@@ -93,7 +94,7 @@ export default async function handler(request: any, response: any): Promise<void
 
       return {
         id,
-        type: 'movie',
+        type: catalogType,
         name: movie?.title || cleanTitle || 'Telegram Stream',
         description: movie?.overview || item.file_name || item.normalized_title || 'Indexed Telegram stream',
         poster: movie?.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : undefined,

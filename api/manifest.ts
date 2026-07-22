@@ -3,10 +3,13 @@ export default function handler(_request: any, response: any): void {
     id: 'org.personal.telegrambridge',
     version: '0.1.0',
     name: 'Telegram Bridge',
-    description: 'Private indexed media streams',
+    description: 'Private indexed media streams for Movies & Series',
     resources: ['catalog', 'stream'],
-    types: ['movie'],
+    types: ['movie', 'series'],
     idPrefixes: ['tt', 'tg:'],
-    catalogs: [{ type: 'movie', id: 'telegram', name: 'Telegram Library', extra: [{ name: 'search', isRequired: true }] }]
+    catalogs: [
+      { type: 'movie', id: 'telegram', name: 'Telegram Movies', extra: [{ name: 'search', isRequired: true }] },
+      { type: 'series', id: 'telegram', name: 'Telegram Series', extra: [{ name: 'search', isRequired: true }] }
+    ]
   });
 }
