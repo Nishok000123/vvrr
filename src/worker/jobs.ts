@@ -17,11 +17,20 @@ function getBotPriority(username: string): number {
   return index >= 0 ? index : 999;
 }
 
+function processDirectUrl(rawUrl: string): string {
+  let clean = rawUrl.replace(/[),.;]+$/, '');
+  // Convert Zeus bot landing download page to direct fast stream link!
+  if (clean.includes('filetolinkzeus.com/download/')) {
+    clean = clean.replace('/download/', '/stream/');
+  }
+  return clean;
+}
+
 function extractUrl(text: string, pattern: string | null): string | null {
   if (pattern) {
     try {
       const match = new RegExp(pattern, 'i').exec(text)?.[0];
-      if (match) return match.replace(/[),.;]+$/, '');
+      if (match) return processDirectUrl(match);
     } catch {}
   }
 
@@ -30,7 +39,7 @@ function extractUrl(text: string, pattern: string | null): string | null {
     text.match(/(?:watch|stream)[^\s<>"']*(https?:\/\/[^\s<>"']+)/i) ||
     text.match(/(https?:\/\/[^\s<>"']*(?:watch|stream)[^\s<>"']*)/i);
   if (watchMatch && watchMatch[1]) {
-    return watchMatch[1].replace(/[),.;]+$/, '');
+    return processDirectUrl(watchMatch[1]);
   }
 
   // 2. Download links
@@ -38,12 +47,12 @@ function extractUrl(text: string, pattern: string | null): string | null {
     text.match(/(?:download|link)[^\s<>"']*(https?:\/\/[^\s<>"']+)/i) ||
     text.match(/(https?:\/\/[^\s<>"']*(?:download|link)[^\s<>"']*)/i);
   if (downloadMatch && downloadMatch[1]) {
-    return downloadMatch[1].replace(/[),.;]+$/, '');
+    return processDirectUrl(downloadMatch[1]);
   }
 
   // 3. Any standard HTTP(S) URL
   const genericMatch = text.match(/https?:\/\/[^\s<>"']+/i)?.[0];
-  return genericMatch?.replace(/[),.;]+$/, '') ?? null;
+  return genericMatch ? processDirectUrl(genericMatch) : null;
 }
 
 async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: number): Promise<string | null> {
@@ -71,7 +80,7 @@ async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: n
 
             // 1. Direct URL buttons (long press copy link)
             if (btn.url && /^https?:\/\//i.test(btn.url)) {
-              const url = extractUrl(btn.url, bot.url_pattern) || btn.url.replace(/[),.;]+$/, '');
+              const url = extractUrl(btn.url, bot.url_pattern) || processDirectUrl(btn.url);
               if (url) return url;
             } else if (!clickedButtons.has(btnKey)) {
               // 2. Callback buttons (trigger link generation)
@@ -170,7 +179,7 @@ export async function processJobs(client: any): Promise<void> {
 }
 
 export async function cleanupLinks(): Promise<void> {
-  const cutoff = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+  const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
   const { error } = await db.from('direct_links').delete().lt('created_at', cutoff);
   if (error) throw error;
 }
