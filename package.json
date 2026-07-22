@@ -1,0 +1,25 @@
+{
+  "name": "telegram-stremio-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "compile": "tsc",
+    "test": "tsx --test test/**/*.test.ts",
+    "start:worker": "tsx --env-file=.env src/worker/index.ts",
+    "telegram:login": "tsx --env-file=.env src/worker/login.ts",
+    "add:channel": "tsx --env-file=.env src/tools/add.ts channel",
+    "add:bot": "tsx --env-file=.env src/tools/add.ts bot"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "input": "^1.0.1",
+    "telegram": "^2.26.22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

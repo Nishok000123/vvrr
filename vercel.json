@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/stream/movie/[id].ts": { "maxDuration": 45 }
+  }
+}
