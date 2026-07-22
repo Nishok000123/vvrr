@@ -49,7 +49,7 @@ function extractUrl(text: string, pattern: string | null): string | null {
 async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: number): Promise<string | null> {
   const clickedButtons = new Set<string>();
 
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  for (let attempt = 0; attempt < 15; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const messages = await client.getMessages(botEntity, { limit: 10 });
 
@@ -115,9 +115,9 @@ async function runJob(client: any, job: Job): Promise<void> {
   const sortedBots = ((bots ?? []) as Bot[]).sort((a, b) => getBotPriority(a.username) - getBotPriority(b.username));
 
   const sourceEntity = await client.getEntity(/^ -?\d+$/.test(source.telegram_channel.trim()) ? BigInt(source.telegram_channel.trim()) : source.telegram_channel);
-  const rows: Array<{ media_id: string; link_bot_id: string; url: string }> = [];
 
-  for (const bot of sortedBots) {
+  // Parallel execution across all enabled link generators for fast fallbacks
+  const linkPromises = sortedBots.map(async (bot) => {
     try {
       const targetId = /^ -?\d+$/.test(bot.username.trim()) ? BigInt(bot.username.trim()) : bot.username;
       const destination = await client.getEntity(targetId);
@@ -125,14 +125,18 @@ async function runJob(client: any, job: Job): Promise<void> {
 
       await client.forwardMessages(destination, { messages: [item.telegram_message_id], fromPeer: sourceEntity });
       const url = await waitForBotUrl(client, destination, bot, started);
-
-      if (url) {
-        rows.push({ media_id: job.media_id, link_bot_id: bot.id, url });
-      }
+      if (url) return { media_id: job.media_id, link_bot_id: bot.id, url, priority: getBotPriority(bot.username) };
     } catch (e: any) {
       console.error(`Error processing bot/channel ${bot.username}:`, e?.message);
     }
-  }
+    return null;
+  });
+
+  const results = await Promise.all(linkPromises);
+  const rows = results
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => a.priority - b.priority)
+    .map(({ priority, ...rest }) => rest);
 
   if (rows.length) {
     const { error } = await db.from('direct_links').upsert(rows, { onConflict: 'media_id,link_bot_id,url', ignoreDuplicates: true });
