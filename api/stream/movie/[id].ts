@@ -27,10 +27,20 @@ async function queueJobs(mediaIds: string[]): Promise<void> {
 export const config = { maxDuration: 45 };
 
 export default async function handler(request: any, response: any): Promise<void> {
-  const imdbId = String(request.query.id ?? '').replace(/\.json$/, '');
-  const { data: media, error } = await db.from('media').select('id').eq('imdb_id', imdbId).limit(10);
-  if (error) throw error;
-  const mediaIds = (media ?? []).map((item) => item.id);
+  const rawId = String(request.query.id ?? '').replace(/\.json$/, '');
+
+  let mediaIds: string[] = [];
+
+  if (rawId.startsWith('tg:')) {
+    mediaIds = [rawId.slice(3)];
+  } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)) {
+    mediaIds = [rawId];
+  } else {
+    const { data: media, error } = await db.from('media').select('id').eq('imdb_id', rawId).limit(10);
+    if (error) throw error;
+    mediaIds = (media ?? []).map((item) => item.id);
+  }
+
   if (!mediaIds.length) return response.status(200).json({ streams: [] });
 
   let links = await cachedLinks(mediaIds);
@@ -43,5 +53,5 @@ export default async function handler(request: any, response: any): Promise<void
       if (links.length) break;
     }
   }
-  response.status(200).json({ streams: links.map((link) => ({ name: 'Telegram Bridge', title: 'Telegram direct link', url: link.url })) });
+  response.status(200).json({ streams: links.map((link) => ({ name: 'Telegram Bridge', title: '⚡ Fast Stream Link', url: link.url })) });
 }

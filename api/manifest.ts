@@ -6,7 +6,7 @@ export default function handler(_request: any, response: any): void {
     description: 'Private indexed media streams',
     resources: ['catalog', 'stream'],
     types: ['movie'],
-    idPrefixes: ['tt'],
+    idPrefixes: ['tt', 'tg:'],
     catalogs: [{ type: 'movie', id: 'telegram', name: 'Telegram Library', extra: [{ name: 'search', isRequired: true }] }]
   });
 }
