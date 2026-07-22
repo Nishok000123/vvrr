@@ -3,21 +3,98 @@ import { db, type Media } from '../shared/db.js';
 type Job = { id: string; media_id: string };
 type Bot = { id: string; username: string; url_pattern: string | null };
 
-function extractUrl(text: string, pattern: string | null): string | null {
-  const match = pattern ? new RegExp(pattern).exec(text)?.[0] : text.match(/https?:\/\/[^\s<>"']+/i)?.[0];
-  return match?.replace(/[),.;]+$/, '') ?? null;
+const PREFERRED_PRIORITY: string[] = [
+  '-1002407145439',
+  'filetolinkzeus_bot',
+  'dd_bypass_bot',
+  'filetolink_4gb_ultraspeedv3_bot',
+  'reaperfiletolinkbot',
+  'harvedclgfriesbot'
+];
+
+function getBotPriority(username: string): number {
+  const clean = username.replace(/^@/, '').toLowerCase().trim();
+  const index = PREFERRED_PRIORITY.findIndex((item) => item.toLowerCase() === clean);
+  return index >= 0 ? index : 999;
 }
 
-async function waitForBotUrl(client: any, bot: Bot, notBefore: number): Promise<string | null> {
-  const entity = await client.getEntity(bot.username);
-  for (let attempt = 0; attempt < 15; attempt += 1) {
+function extractUrl(text: string, pattern: string | null): string | null {
+  if (pattern) {
+    try {
+      const match = new RegExp(pattern, 'i').exec(text)?.[0];
+      if (match) return match.replace(/[),.;]+$/, '');
+    } catch {}
+  }
+
+  // 1. Stream / Watch links (Highest preference for video playback)
+  const watchMatch =
+    text.match(/(?:watch|stream)[^\s<>"']*(https?:\/\/[^\s<>"']+)/i) ||
+    text.match(/(https?:\/\/[^\s<>"']*(?:watch|stream)[^\s<>"']*)/i);
+  if (watchMatch && watchMatch[1]) {
+    return watchMatch[1].replace(/[),.;]+$/, '');
+  }
+
+  // 2. Download links
+  const downloadMatch =
+    text.match(/(?:download|link)[^\s<>"']*(https?:\/\/[^\s<>"']+)/i) ||
+    text.match(/(https?:\/\/[^\s<>"']*(?:download|link)[^\s<>"']*)/i);
+  if (downloadMatch && downloadMatch[1]) {
+    return downloadMatch[1].replace(/[),.;]+$/, '');
+  }
+
+  // 3. Any standard HTTP(S) URL
+  const genericMatch = text.match(/https?:\/\/[^\s<>"']+/i)?.[0];
+  return genericMatch?.replace(/[),.;]+$/, '') ?? null;
+}
+
+async function waitForBotUrl(client: any, botEntity: any, bot: Bot, notBefore: number): Promise<string | null> {
+  const clickedButtons = new Set<string>();
+
+  for (let attempt = 0; attempt < 25; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const messages = await client.getMessages(entity, { limit: 10 });
-    for (const message of messages as any[]) {
+    const messages = await client.getMessages(botEntity, { limit: 10 });
+
+    for (const message of (messages ?? []) as any[]) {
       const timestamp = Number(message.date ?? 0) * 1000;
-      if (timestamp < notBefore - 2000) continue;
-      const url = extractUrl(String(message.message ?? ''), bot.url_pattern);
-      if (url) return url;
+      if (timestamp < notBefore - 3000) continue;
+
+      const text = String(message.message ?? '');
+      const textUrl = extractUrl(text, bot.url_pattern);
+      if (textUrl) return textUrl;
+
+      // Check inline buttons
+      if (message.buttons) {
+        for (let r = 0; r < message.buttons.length; r++) {
+          for (let c = 0; c < message.buttons[r].length; c++) {
+            const btn = message.buttons[r][c];
+            const btnKey = `${message.id}:${r}:${c}`;
+
+            if (btn.url && /^https?:\/\//i.test(btn.url)) {
+              const url = extractUrl(btn.url, bot.url_pattern);
+              if (url) return url;
+            }
+
+            if (!clickedButtons.has(btnKey)) {
+              const label = String(btn.text || '').toLowerCase();
+              if (
+                label.includes('generate') ||
+                label.includes('link') ||
+                label.includes('download') ||
+                label.includes('watch') ||
+                label.includes('dl') ||
+                label.includes('stream')
+              ) {
+                clickedButtons.add(btnKey);
+                try {
+                  await message.click(r, c);
+                } catch (e: any) {
+                  console.log(`Failed to click button '${btn.text}':`, e?.message);
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
   return null;
@@ -29,22 +106,45 @@ async function runJob(client: any, job: Job): Promise<void> {
   const item = media as Media;
   const { data: source, error: sourceError } = await db.from('source_channels').select('telegram_channel').eq('id', item.source_id).single();
   if (sourceError) throw sourceError;
-  const { data: bots, error: botsError } = await db.from('link_bots').select('id, username, url_pattern').eq('enabled', true);
-  if (botsError) throw botsError;
-  const started = Date.now();
-  const sourceEntity = await client.getEntity(source.telegram_channel);
 
-  const links = await Promise.all((bots ?? []).map(async (bot: Bot) => {
-    const destination = await client.getEntity(bot.username);
-    await client.forwardMessages(destination, { messages: [item.telegram_message_id], fromPeer: sourceEntity });
-    return { bot, url: await waitForBotUrl(client, bot, started) };
-  }));
-  const rows = links.filter((item) => item.url).map((item) => ({ media_id: job.media_id, link_bot_id: item.bot.id, url: item.url! }));
+  const { data: bots, error: botsError } = await db
+    .from('link_bots')
+    .select('id, username, url_pattern')
+    .eq('enabled', true);
+  if (botsError) throw botsError;
+
+  const sortedBots = ((bots ?? []) as Bot[]).sort((a, b) => getBotPriority(a.username) - getBotPriority(b.username));
+
+  const sourceEntity = await client.getEntity(/^ -?\d+$/.test(source.telegram_channel.trim()) ? BigInt(source.telegram_channel.trim()) : source.telegram_channel);
+  const rows: Array<{ media_id: string; link_bot_id: string; url: string }> = [];
+
+  for (const bot of sortedBots) {
+    try {
+      const targetId = /^ -?\d+$/.test(bot.username.trim()) ? BigInt(bot.username.trim()) : bot.username;
+      const destination = await client.getEntity(targetId);
+      const started = Date.now();
+
+      await client.forwardMessages(destination, { messages: [item.telegram_message_id], fromPeer: sourceEntity });
+      const url = await waitForBotUrl(client, destination, bot, started);
+
+      if (url) {
+        rows.push({ media_id: job.media_id, link_bot_id: bot.id, url });
+      }
+    } catch (e: any) {
+      console.error(`Error processing bot/channel ${bot.username}:`, e?.message);
+    }
+  }
+
   if (rows.length) {
     const { error } = await db.from('direct_links').upsert(rows, { onConflict: 'media_id,link_bot_id,url', ignoreDuplicates: true });
     if (error) throw error;
   }
-  const { error } = await db.from('generation_jobs').update({ status: rows.length ? 'complete' : 'failed', completed_at: new Date().toISOString(), error: rows.length ? null : 'No link bot returned a URL' }).eq('id', job.id);
+
+  const { error } = await db.from('generation_jobs').update({
+    status: rows.length ? 'complete' : 'failed',
+    completed_at: new Date().toISOString(),
+    error: rows.length ? null : 'No link bot returned a URL'
+  }).eq('id', job.id);
   if (error) throw error;
 }
 

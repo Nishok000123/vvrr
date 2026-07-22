@@ -22,7 +22,8 @@ export async function indexSources(client: any): Promise<void> {
 }
 
 async function indexSource(client: any, source: Source): Promise<void> {
-  const channel = await client.getEntity(source.telegram_channel);
+  const channelId = /^ -?\d+$/.test(source.telegram_channel.trim()) ? BigInt(source.telegram_channel.trim()) : source.telegram_channel;
+  const channel = await client.getEntity(channelId);
   let newestId = source.last_message_id;
   const messages: any[] = [];
   for await (const message of client.iterMessages(channel, { minId: source.last_message_id, reverse: true })) messages.push(message);

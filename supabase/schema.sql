@@ -35,6 +35,7 @@ create table if not exists link_bots (
   username text not null unique,
   enabled boolean not null default true,
   url_pattern text,
+  priority integer not null default 10,
   created_at timestamptz not null default now()
 );
 
