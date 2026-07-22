@@ -18,36 +18,48 @@ function mediaDetails(message: any): { fileName: string | null; caption: string 
 export async function indexSources(client: any): Promise<void> {
   const { data: sources, error } = await db.from('source_channels').select('id, telegram_channel, last_message_id').eq('enabled', true);
   if (error) throw error;
-  for (const source of (sources ?? []) as Source[]) await indexSource(client, source);
+  for (const source of (sources ?? []) as Source[]) {
+    await indexSource(client, source).catch((err: Error) => {
+      console.error(`Error indexing source channel ${source.telegram_channel}:`, err.message);
+    });
+  }
 }
 
 async function indexSource(client: any, source: Source): Promise<void> {
   const channelId = /^ -?\d+$/.test(source.telegram_channel.trim()) ? BigInt(source.telegram_channel.trim()) : source.telegram_channel;
   const channel = await client.getEntity(channelId);
   let newestId = source.last_message_id;
-  const messages: any[] = [];
-  for await (const message of client.iterMessages(channel, { minId: source.last_message_id, reverse: true })) messages.push(message);
+  let batchCount = 0;
 
-  for (const message of messages) {
-    newestId = Math.max(newestId, Number(message.id));
+  for await (const message of client.iterMessages(channel, { minId: source.last_message_id, reverse: true })) {
+    const msgId = Number(message.id);
+    if (msgId > newestId) newestId = msgId;
+
     const details = mediaDetails(message);
-    if (!details) continue;
-    const title = titleFromMedia(details.fileName, details.caption);
-    const match = await findMovie(title).catch(() => null);
-    const { error } = await db.from('media').upsert({
-      source_id: source.id,
-      telegram_message_id: Number(message.id),
-      file_name: details.fileName,
-      caption: details.caption,
-      file_size: details.fileSize,
-      normalized_title: title,
-      tmdb_id: match?.tmdbId ?? null,
-      imdb_id: match?.imdbId ?? null
-    }, { onConflict: 'source_id,telegram_message_id', ignoreDuplicates: true });
-    if (error) throw error;
+    if (details) {
+      const title = titleFromMedia(details.fileName, details.caption);
+      const match = await findMovie(title).catch(() => null);
+
+      await db.from('media').upsert({
+        source_id: source.id,
+        telegram_message_id: msgId,
+        file_name: details.fileName,
+        caption: details.caption,
+        file_size: details.fileSize,
+        normalized_title: title,
+        tmdb_id: match?.tmdbId ?? null,
+        imdb_id: match?.imdbId ?? null
+      }, { onConflict: 'source_id,telegram_message_id', ignoreDuplicates: true });
+    }
+
+    batchCount++;
+    if (batchCount % 50 === 0) {
+      await db.from('source_channels').update({ last_message_id: newestId }).eq('id', source.id);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
   }
+
   if (newestId !== source.last_message_id) {
-    const { error } = await db.from('source_channels').update({ last_message_id: newestId }).eq('id', source.id);
-    if (error) throw error;
+    await db.from('source_channels').update({ last_message_id: newestId }).eq('id', source.id);
   }
 }

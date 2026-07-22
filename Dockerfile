@@ -5,4 +5,4 @@ RUN npm ci
 COPY . .
 RUN npm run compile && npm prune --omit=dev
 ENV NODE_ENV=production
-CMD ["node", "dist/src/worker/index.js"]
+CMD ["node", "--max-old-space-size=400", "dist/src/worker/index.js"]
