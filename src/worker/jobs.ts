@@ -8,8 +8,7 @@ const PREFERRED_PRIORITY: string[] = [
   'filetolinkzeus_bot',
   'dd_bypass_bot',
   'filetolink_4gb_ultraspeedv3_bot',
-  'reaperfiletolinkbot',
-  'harvedclgfriesbot'
+  'reaperfiletolinkbot'
 ];
 
 function getBotPriority(username: string): number {
